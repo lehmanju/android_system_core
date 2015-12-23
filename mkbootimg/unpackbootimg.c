@@ -1,3 +1,7 @@
+#ifdef HAVE_CONFIG_H
+    #include "autoconfig.h"
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -7,7 +11,11 @@
 #include <limits.h>
 #include <libgen.h>
 
-#include "mincrypt/sha.h"
+#include <openssl/sha.h>
+#define SHA_INIT    SHA1_Init
+#define SHA_UPDATE  SHA1_Update
+#define SHA_FINAL(sha, ctx) SHA1_Final(sha, ctx)
+
 #include "bootimg.h"
 
 typedef unsigned char byte;
@@ -52,6 +60,9 @@ int main(int argc, char** argv)
     char* directory = "./";
     char* filename = NULL;
     int pagesize = 0;
+    SHA_CTX ctx;
+
+    unsigned char sha[SHA_DIGEST_LENGTH];
 
     argc--;
     argv++;
@@ -152,6 +163,32 @@ int main(int argc, char** argv)
     
     fclose(f);
     
+    byte* second = (byte*)malloc(header.second_size);
+    /* put a hash of the contents in the header so boot images can be
+     * differentiated based on their first 2k.
+     */
+    SHA_INIT(&ctx);
+    SHA_UPDATE(&ctx, kernel, header.kernel_size);
+    SHA_UPDATE(&ctx, &header.kernel_size, sizeof(header.kernel_size));
+    SHA_UPDATE(&ctx, ramdisk, header.ramdisk_size);
+    SHA_UPDATE(&ctx, &header.ramdisk_size, sizeof(header.ramdisk_size));
+    SHA_UPDATE(&ctx, second, header.second_size);
+    SHA_UPDATE(&ctx, &header.second_size, sizeof(header.second_size));
+    /* tags_addr, page_size, unused[2], name[], and cmdline[] */
+    SHA_UPDATE(&ctx, &header.tags_addr, 4 + 4 + 4 + 4 + 16 + 512);
+    SHA1_Final(sha, &ctx);
+
+
+    char chksum[41];
+    int n;
+    for (n=0; n<20; n++)
+	snprintf(&chksum[n*2], 3, "%02X", sha[n]);
+
+   int cmp = memcmp(header.id, sha,
+           SHA_DIGEST_LENGTH > sizeof(header.id) ? sizeof(header.id) : SHA_DIGEST_LENGTH);
+
+
+    printf("Checksum %s %s\n", chksum, cmp ? "WRONG" : "OK");
     //printf("Total Read: %d\n", total_read);
     return 0;
 }
